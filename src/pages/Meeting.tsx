@@ -59,6 +59,7 @@ const Meeting = () => {
       ws.onmessage = (ev) => {
         try {
           const msg = JSON.parse(ev.data);
+          if (msg.type === 'meeting-ended') { navigate('/home'); return; }
           if (msg.type === 'user-joined' && msg.user) {
             setParticipants(prev => prev.some(p => p.id === msg.user.id) ? prev : [...prev, { id: msg.user.id, name: msg.user.name }]);
             if ((me?.id||0) < msg.user.id) {
@@ -83,6 +84,11 @@ const Meeting = () => {
               return arr;
             });
             if (typeof msg.presenter_id === 'number') setPresenterId(msg.presenter_id);
+            // Try initiating to larger-ids after snapshot
+            setTimeout(() => {
+              const current = participantsRef.current;
+              current.forEach(p => { if (!p.isSelf && (me?.id||0) < Number(p.id)) callPeer(Number(p.id)); });
+            }, 100);
           }
           if (msg.type === 'screen-share-start') {
             setPresenterId(msg.sender?.id ?? null);
@@ -96,6 +102,8 @@ const Meeting = () => {
             if (uid) setParticipants(prev => prev.map(p => Number(p.id) === Number(uid) ? { ...p, isMuted: media.mic === false, isCameraOn: media.cam !== false } : p));
           }
           if (msg.type === 'chat') {
+            const senderId = msg.sender?.id;
+            if (senderId && me && senderId === me.id) return; // ignore echo of own message
             const sender = msg.sender?.name || 'User';
             const text = msg.data?.text || '';
             const time = msg.data?.timestamp ? new Date(msg.data.timestamp).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}) : new Date().toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
