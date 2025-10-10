@@ -17,14 +17,21 @@ interface VideoTileProps {
 const VideoTile = ({ participant }: VideoTileProps) => {
   const videoRef = useRef<HTMLVideoElement | null>(null);
 
+  // Ensure srcObject binds on mount and when camera state toggles
   useEffect(() => {
-    if (!videoRef.current) return;
-    if (participant.stream) {
-      if (videoRef.current.srcObject !== participant.stream) {
-        videoRef.current.srcObject = participant.stream;
+    const el = videoRef.current;
+    if (!el) return;
+    if (participant.stream && participant.isCameraOn !== false) {
+      if (el.srcObject !== participant.stream) {
+        el.srcObject = participant.stream;
       }
+      // Attempt to play in case the element was re-rendered
+      el.play?.().catch(() => {});
+    } else {
+      // Pause when camera is off (saves resources); keep stream reference intact
+      try { el.pause?.(); } catch {}
     }
-  }, [participant.stream]);
+  }, [participant.stream, participant.isCameraOn]);
 
   const showAvatar = !participant.stream || participant.isCameraOn === false;
 
