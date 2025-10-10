@@ -4,23 +4,17 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 
 interface ParticipantPanelProps {
   onClose: () => void;
+  participants: Participant[];
 }
 
 interface Participant {
-  id: string;
+  id: number | string;
   name: string;
-  isMuted: boolean;
-  isHost: boolean;
+  isMuted?: boolean;
+  isHost?: boolean;
 }
 
-const ParticipantPanel = ({ onClose }: ParticipantPanelProps) => {
-  const participants: Participant[] = [
-    { id: "1", name: "You", isMuted: false, isHost: true },
-    { id: "2", name: "Alex Johnson", isMuted: false, isHost: false },
-    { id: "3", name: "Sarah Smith", isMuted: true, isHost: false },
-    { id: "4", name: "Mike Chen", isMuted: false, isHost: false },
-    { id: "5", name: "Emily Davis", isMuted: false, isHost: false },
-  ];
+const ParticipantPanel = ({ onClose, participants }: ParticipantPanelProps) => {
 
   return (
     <div className="w-80 border-l bg-card flex flex-col">

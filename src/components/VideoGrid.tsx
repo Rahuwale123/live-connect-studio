@@ -1,55 +1,54 @@
-import { User } from "lucide-react";
 import VideoTile from "./VideoTile";
 
-interface VideoGridProps {
-  isCameraOn: boolean;
-  isScreenSharing: boolean;
+export interface GridParticipant {
+  id: number | string;
+  name: string;
+  isMuted?: boolean;
+  isCameraOn?: boolean;
+  stream?: MediaStream;
+  isSelf?: boolean;
 }
 
-const VideoGrid = ({ isCameraOn, isScreenSharing }: VideoGridProps) => {
-  // Mock participants data
-  const participants = [
-    { id: "1", name: "You", isMuted: false, isCameraOn },
-    { id: "2", name: "Alex Johnson", isMuted: false, isCameraOn: true },
-    { id: "3", name: "Sarah Smith", isMuted: true, isCameraOn: true },
-    { id: "4", name: "Mike Chen", isMuted: false, isCameraOn: false },
-  ];
+interface VideoGridProps {
+  participants: GridParticipant[];
+  isScreenSharing: boolean;
+  screenShare?: { stream: MediaStream; ownerName: string } | null;
+}
 
-  const gridClass = isScreenSharing
-    ? "grid-cols-1"
-    : participants.length === 1
-    ? "grid-cols-1"
-    : participants.length === 2
-    ? "grid-cols-2"
-    : participants.length <= 4
-    ? "grid-cols-2"
-    : "grid-cols-3";
-
-  return (
-    <div className="flex-1 p-4 overflow-y-auto">
-      {isScreenSharing ? (
-        <div className="h-full space-y-4">
-          <div className="h-3/4 bg-secondary rounded-xl flex items-center justify-center shadow-md">
-            <div className="text-center">
-              <div className="w-16 h-16 bg-primary/10 rounded-full flex items-center justify-center mx-auto mb-3">
-                <User className="w-8 h-8 text-primary" />
-              </div>
-              <p className="text-sm text-muted-foreground">Screen being shared</p>
-            </div>
+const VideoGrid = ({ participants, isScreenSharing, screenShare }: VideoGridProps) => {
+  if (screenShare) {
+    // Presentation layout: large shared screen + filmstrip
+    return (
+      <div className="flex-1 flex flex-col overflow-hidden">
+        <div className="flex-1 p-4 pb-2 overflow-hidden">
+          <div className="w-full h-full bg-secondary rounded-xl overflow-hidden shadow-md">
+            <video autoPlay playsInline controls={false} className="w-full h-full object-contain" ref={(el) => { if (el && el.srcObject !== screenShare.stream) el.srcObject = screenShare.stream; }} />
+            <div className="absolute m-4 px-2 py-1 bg-black/50 text-white text-xs rounded">{screenShare.ownerName} is presenting</div>
           </div>
-          <div className="h-1/4 grid grid-cols-4 gap-3">
-            {participants.slice(0, 4).map((participant) => (
-              <VideoTile key={participant.id} participant={participant} />
+        </div>
+        <div className="p-3 pt-0">
+          <div className="flex gap-3 overflow-x-auto no-scrollbar">
+            {participants.map((p) => (
+              <div key={p.id} className="w-[220px] h-[140px] flex-shrink-0">
+                <VideoTile participant={p} />
+              </div>
             ))}
           </div>
         </div>
-      ) : (
-        <div className={`grid ${gridClass} gap-4 h-full auto-rows-fr`}>
-          {participants.map((participant) => (
-            <VideoTile key={participant.id} participant={participant} />
-          ))}
-        </div>
-      )}
+      </div>
+    );
+  }
+
+  // Regular grid layout
+  const n = participants.length;
+  const gridClass = n <= 1 ? "grid-cols-1" : n === 2 ? "grid-cols-2" : n <= 4 ? "grid-cols-2" : "grid-cols-3";
+  return (
+    <div className="flex-1 p-4 overflow-y-auto">
+      <div className={`grid ${gridClass} gap-4 h-full auto-rows-fr`}>
+        {participants.map((p) => (
+          <VideoTile key={p.id} participant={p} />
+        ))}
+      </div>
     </div>
   );
 };

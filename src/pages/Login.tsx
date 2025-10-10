@@ -5,16 +5,21 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { login as apiLogin } from "@/lib/api";
 
 const Login = () => {
   const navigate = useNavigate();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const [error, setError] = useState<string | null>(null);
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    // Mock login - just navigate to home
-    navigate("/home");
+    setError(null);
+    try {
+      await apiLogin(email, password);
+      navigate("/home");
+    } catch (err: any) { setError(err.message || 'Login failed'); }
   };
 
   return (
@@ -57,6 +62,7 @@ const Login = () => {
               Sign in
             </Button>
           </form>
+          {error && <p className="mt-3 text-sm text-destructive">{error}</p>}
           <div className="mt-6 text-center text-sm">
             <span className="text-muted-foreground">Don't have an account? </span>
             <Link to="/signup" className="text-primary hover:underline font-medium">

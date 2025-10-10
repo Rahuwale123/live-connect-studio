@@ -1,26 +1,49 @@
+import { useEffect, useRef } from "react";
 import { Mic, MicOff, User } from "lucide-react";
 
-interface Participant {
-  id: string;
+interface TileParticipant {
+  id: number | string;
   name: string;
-  isMuted: boolean;
-  isCameraOn: boolean;
+  stream?: MediaStream;
+  isMuted?: boolean;
+  isCameraOn?: boolean;
+  isSelf?: boolean;
 }
 
 interface VideoTileProps {
-  participant: Participant;
+  participant: TileParticipant;
 }
 
 const VideoTile = ({ participant }: VideoTileProps) => {
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+
+  useEffect(() => {
+    if (!videoRef.current) return;
+    if (participant.stream) {
+      if (videoRef.current.srcObject !== participant.stream) {
+        videoRef.current.srcObject = participant.stream;
+      }
+    }
+  }, [participant.stream]);
+
+  const showAvatar = !participant.stream || participant.isCameraOn === false;
+
   return (
     <div className="relative bg-secondary rounded-xl overflow-hidden shadow-md group">
       <div className="absolute inset-0 flex items-center justify-center">
-        {participant.isCameraOn ? (
-          <div className="w-full h-full bg-gradient-to-br from-primary/20 to-primary/5" />
-        ) : (
+        {showAvatar ? (
           <div className="w-20 h-20 bg-primary/10 rounded-full flex items-center justify-center">
             <User className="w-10 h-10 text-primary" />
           </div>
+        ) : (
+          <video
+            ref={videoRef}
+            autoPlay
+            playsInline
+            muted={!!participant.isSelf}
+            className="w-full h-full object-cover"
+            style={{ transform: participant.isSelf ? 'scaleX(-1)' : 'none', transformOrigin: 'center center' }}
+          />
         )}
       </div>
 

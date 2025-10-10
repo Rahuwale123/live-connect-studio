@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { signup as apiSignup } from "@/lib/api";
 
 const Signup = () => {
   const navigate = useNavigate();
@@ -12,10 +13,14 @@ const Signup = () => {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const [error, setError] = useState<string | null>(null);
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    // Mock signup - just navigate to home
-    navigate("/home");
+    setError(null);
+    try {
+      await apiSignup(name, email, password);
+      navigate("/home");
+    } catch (err: any) { setError(err.message || 'Signup failed'); }
   };
 
   return (
@@ -69,6 +74,7 @@ const Signup = () => {
               Sign up
             </Button>
           </form>
+          {error && <p className="mt-3 text-sm text-destructive">{error}</p>}
           <div className="mt-6 text-center text-sm">
             <span className="text-muted-foreground">Already have an account? </span>
             <Link to="/login" className="text-primary hover:underline font-medium">

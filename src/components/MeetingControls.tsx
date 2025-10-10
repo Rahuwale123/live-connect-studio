@@ -8,6 +8,7 @@ interface MeetingControlsProps {
   isScreenSharing: boolean;
   showChat: boolean;
   showParticipants: boolean;
+  unreadCount?: number;
   onToggleCamera: () => void;
   onToggleMic: () => void;
   onToggleScreenShare: () => void;
@@ -28,6 +29,7 @@ const MeetingControls = ({
   onToggleChat,
   onToggleParticipants,
   onLeaveMeeting,
+  unreadCount = 0,
 }: MeetingControlsProps) => {
   return (
     <TooltipProvider>
@@ -84,10 +86,15 @@ const MeetingControls = ({
               <Button
                 variant={showChat ? "default" : "secondary"}
                 size="icon"
-                className="rounded-full w-12 h-12"
+                className="rounded-full w-12 h-12 relative"
                 onClick={onToggleChat}
               >
                 <MessageSquare className="w-5 h-5" />
+                {unreadCount > 0 && (
+                  <span className="absolute -top-1 -right-1 bg-destructive text-destructive-foreground text-[10px] rounded-full px-1.5 py-0.5 leading-none">
+                    {unreadCount}
+                  </span>
+                )}
               </Button>
             </TooltipTrigger>
             <TooltipContent>Chat</TooltipContent>

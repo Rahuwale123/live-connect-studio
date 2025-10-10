@@ -6,6 +6,8 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 
 interface ChatPanelProps {
   onClose: () => void;
+  messages: Message[];
+  onSend: (text: string) => void;
 }
 
 interface Message {
@@ -16,27 +18,12 @@ interface Message {
   isSelf: boolean;
 }
 
-const ChatPanel = ({ onClose }: ChatPanelProps) => {
+const ChatPanel = ({ onClose, messages, onSend }: ChatPanelProps) => {
   const [message, setMessage] = useState("");
-  const [messages, setMessages] = useState<Message[]>([
-    { id: "1", sender: "Alex Johnson", text: "Hey everyone!", time: "10:30 AM", isSelf: false },
-    { id: "2", sender: "You", text: "Hi Alex!", time: "10:31 AM", isSelf: true },
-    { id: "3", sender: "Sarah Smith", text: "Good morning!", time: "10:32 AM", isSelf: false },
-  ]);
 
   const handleSendMessage = (e: React.FormEvent) => {
     e.preventDefault();
-    if (message.trim()) {
-      const newMessage: Message = {
-        id: Date.now().toString(),
-        sender: "You",
-        text: message,
-        time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-        isSelf: true,
-      };
-      setMessages([...messages, newMessage]);
-      setMessage("");
-    }
+    if (message.trim()) { onSend(message.trim()); setMessage(""); }
   };
 
   return (

@@ -4,21 +4,32 @@ import { Video, Plus, LogIn, User } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { createMeeting, joinMeeting, getUser, getToken } from "@/lib/api";
 
 const Home = () => {
   const navigate = useNavigate();
   const [meetingCode, setMeetingCode] = useState("");
 
-  const handleCreateMeeting = () => {
-    const randomCode = Math.random().toString(36).substring(2, 12);
-    navigate(`/meeting/${randomCode}`);
+  const [error, setError] = useState<string | null>(null);
+  const handleCreateMeeting = async () => {
+    setError(null);
+    try {
+      if (!getToken()) { navigate('/login'); return; }
+      const resp = await createMeeting();
+      navigate(`/meeting/${resp.meeting_id}`);
+    } catch (e: any) { setError(e.message || 'Failed to create'); }
   };
 
-  const handleJoinMeeting = (e: React.FormEvent) => {
+  const handleJoinMeeting = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (meetingCode.trim()) {
-      navigate(`/meeting/${meetingCode.trim()}`);
-    }
+    setError(null);
+    const code = meetingCode.trim();
+    if (!code) return;
+    try {
+      if (!getToken()) { navigate('/login'); return; }
+      await joinMeeting(code);
+      navigate(`/meeting/${code}`);
+    } catch (err: any) { setError(err.message || 'Failed to join'); }
   };
 
   return (
@@ -87,6 +98,7 @@ const Home = () => {
               </CardContent>
             </Card>
           </div>
+          {error && <p className="text-sm text-destructive mt-4 text-center">{error}</p>}
         </div>
       </main>
     </div>
