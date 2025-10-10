@@ -51,7 +51,8 @@ export async function listParticipants(meeting_id: string) {
 }
 
 export async function getChat(meeting_id: string) {
-  return request<ChatMessage[]>(`/meeting/${meeting_id}/chat`);
+  const res = await request<any>(`/meeting/${meeting_id}/chat`);
+  return Array.isArray(res) ? (res as ChatMessage[]) : [];
 }
 
 export async function getTurn() { return request<{ iceServers: any[] }>(`/config/turn`); }
@@ -60,4 +61,3 @@ export function wsUrl(meeting_id: string): string {
   const t = getToken();
   return `${BASE_API.replace(/^http/, 'ws')}/ws/meetings/${encodeURIComponent(meeting_id)}?token=${encodeURIComponent(t||'')}`;
 }
-
