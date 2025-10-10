@@ -126,8 +126,46 @@ const Meeting = () => {
     return () => { try { wsRef.current?.close(); } catch {} };
   }, [code]);
 
+  // Ensure devices are turned off on tab close/refresh
+  useEffect(() => {
+    const cleanup = () => {
+      try { peersRef.current.forEach((pc) => { try { pc.close(); } catch {} }); peersRef.current.clear(); } catch {}
+      try { localStreamRef.current?.getTracks().forEach((t) => { try { t.stop(); } catch {} }); localStreamRef.current = null; } catch {}
+      try { screenStreamRef.current?.getTracks().forEach((t) => { try { t.stop(); } catch {} }); screenStreamRef.current = null; } catch {}
+      try { wsRef.current?.close(); } catch {}
+    };
+    window.addEventListener('beforeunload', cleanup);
+    return () => window.removeEventListener('beforeunload', cleanup);
+  }, []);
+
   const handleLeaveMeeting = () => {
-    navigate("/home");
+    try {
+      // Close peer connections
+      peersRef.current.forEach((pc) => { try { pc.close(); } catch {} });
+      peersRef.current.clear();
+      // Stop local camera/mic
+      const ls = localStreamRef.current;
+      if (ls) {
+        ls.getTracks().forEach((t) => {
+          try { t.stop(); } catch {}
+        });
+      }
+      localStreamRef.current = null;
+      // Stop any active screen share
+      const ss = screenStreamRef.current;
+      if (ss) {
+        ss.getTracks().forEach((t) => {
+          try { t.stop(); } catch {}
+        });
+      }
+      screenStreamRef.current = null;
+      // Close websocket
+      try { wsRef.current?.close(); } catch {}
+      // Update UI state to reflect camera off
+      setParticipants((prev) => prev.map((p) => p.isSelf ? { ...p, stream: undefined, isCameraOn: false } : p));
+    } finally {
+      navigate("/home");
+    }
   };
 
   const handleSendChat = (text: string) => {
@@ -151,6 +189,19 @@ const Meeting = () => {
       const stream = ev.streams && ev.streams[0] ? ev.streams[0] : new MediaStream([ev.track]);
       streamsRef.current.set(remoteId, stream);
       setParticipants(prev => prev.map(p => p.id === remoteId ? { ...p, stream, isCameraOn: true } : p));
+      // react to remote track state to keep UI in sync without refresh
+      const tr = ev.track;
+      if (tr && tr.kind === 'video') {
+        tr.onmute = () => {
+          setParticipants(prev => prev.map(p => p.id === remoteId ? { ...p, isCameraOn: false } : p));
+        };
+        tr.onunmute = () => {
+          setParticipants(prev => prev.map(p => p.id === remoteId ? { ...p, isCameraOn: true } : p));
+        };
+        tr.onended = () => {
+          setParticipants(prev => prev.map(p => p.id === remoteId ? { ...p, isCameraOn: false } : p));
+        };
+      }
     };
     pc.onicecandidate = (ev) => {
       if (ev.candidate) wsRef.current?.send(JSON.stringify({ type: 'ice-candidate', data: { to: remoteId, candidate: ev.candidate } }));
