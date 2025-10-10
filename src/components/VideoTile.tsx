@@ -47,7 +47,7 @@ const VideoTile = ({ participant }: VideoTileProps) => {
             ref={videoRef}
             autoPlay
             playsInline
-            muted={!!participant.isSelf}
+            muted={true}
             className="w-full h-full object-cover"
             style={{ transform: participant.isSelf ? 'scaleX(-1)' : 'none', transformOrigin: 'center center' }}
           />

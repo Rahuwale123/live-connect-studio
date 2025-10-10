@@ -177,6 +177,14 @@ const Meeting = () => {
   // Reset unread when opening chat
   useEffect(() => { if (showChat) setUnread(0); }, [showChat]);
 
+  // Try to (re)start playback for all videos when participants or streams change
+  useEffect(() => {
+    try {
+      const videos = document.querySelectorAll('video');
+      videos.forEach((v: any) => v?.play?.().catch(() => {}));
+    } catch {}
+  }, [participants]);
+
   // WebRTC helpers
   function ensurePC(remoteId: number): RTCPeerConnection {
     let pc = peersRef.current.get(remoteId);
