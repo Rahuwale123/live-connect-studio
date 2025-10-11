@@ -33,11 +33,9 @@ const MeetingControls = ({
 }: MeetingControlsProps) => {
   return (
     <TooltipProvider>
-      <div className="h-20 bg-card border-t px-6 flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <span className="text-sm text-muted-foreground">Meeting in progress</span>
-        </div>
-
+      {/* Floating controls bar (Meet-style) */}
+      <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-40 px-3 md:px-4 py-2.5 md:py-3 bg-card/95 backdrop-blur border border-border rounded-full shadow-xl flex items-center gap-2">
+        {/* Controls cluster */}
         <div className="flex items-center gap-2">
           <Tooltip>
             <TooltipTrigger asChild>
@@ -128,8 +126,6 @@ const MeetingControls = ({
             <TooltipContent>Leave meeting</TooltipContent>
           </Tooltip>
         </div>
-
-        <div className="w-24" />
       </div>
     </TooltipProvider>
   );

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { Copy, Check } from "lucide-react";
 import { useParams, useNavigate } from "react-router-dom";
 import VideoGrid, { GridParticipant } from "@/components/VideoGrid";
 import MeetingControls from "@/components/MeetingControls";
@@ -10,12 +11,13 @@ const Meeting = () => {
   const { code } = useParams();
   const navigate = useNavigate();
   const [isCameraOn, setIsCameraOn] = useState(true);
-  const [isMicOn, setIsMicOn] = useState(true);
+  const [isMicOn, setIsMicOn] = useState(false);
   const [isScreenSharing, setIsScreenSharing] = useState(false);
   const [presenterId, setPresenterId] = useState<number | null>(null);
   const [showChat, setShowChat] = useState(false);
   const [showParticipants, setShowParticipants] = useState(false);
   const [unread, setUnread] = useState(0);
+  const [audioEnabled, setAudioEnabled] = useState(true);
   const [participants, setParticipants] = useState<GridParticipant[]>([]);
   const [messages, setMessages] = useState<{id:string; sender:string; text:string; time:string; isSelf:boolean}[]>([]);
   const wsRef = useRef<WebSocket | null>(null);
@@ -26,6 +28,51 @@ const Meeting = () => {
   const participantsRef = useRef<GridParticipant[]>([]);
   const rtcServersRef = useRef<any[]>([]);
   const me = getUser();
+  const [copied, setCopied] = useState(false);
+
+  const handleCopyCode = async () => {
+    try {
+      const text = String(code || "");
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1200);
+    } catch {}
+  };
+
+  const [showAudioGate, setShowAudioGate] = useState(false);
+  // Helper: aggressively try to start all remote audio elements; show gate if blocked
+  function resumeAllAudio() {
+    try {
+      const audios = document.querySelectorAll('audio');
+      let anyBlocked = false;
+      const plays: Promise<any>[] = [];
+      audios.forEach((a: any) => {
+        try {
+          a.muted = false; a.autoplay = true;
+          const p = a.play?.();
+          if (p && typeof p.then === 'function') {
+            plays.push(p.catch(()=>{ anyBlocked = true; }));
+          }
+        } catch { anyBlocked = true; }
+      });
+      if (plays.length) {
+        Promise.allSettled(plays).then(() => { if (anyBlocked) setShowAudioGate(true); else setShowAudioGate(false); });
+      } else {
+        setShowAudioGate(false);
+      }
+    } catch { setShowAudioGate(true); }
+  }
+
+  // On mount, attempt a short retry loop to auto-start audio
+  useEffect(() => {
+    let tries = 0;
+    const id = window.setInterval(() => {
+      tries += 1;
+      resumeAllAudio();
+      if (tries >= 8) window.clearInterval(id);
+    }, 750);
+    return () => window.clearInterval(id);
+  }, []);
 
   useEffect(() => {
     if (!code) return;
@@ -44,9 +91,14 @@ const Meeting = () => {
         const hist = await apiGetChat(code);
         setMessages(hist.map(h => ({ id: String(h.id), sender: h.name, text: h.message, time: new Date(h.timestamp).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}), isSelf: false })));
       } catch (e) { console.warn('Chat history unavailable', e); }
-      // Media
-      const local = await navigator.mediaDevices.getUserMedia({ audio: true, video: { width: 1280, height: 720 } });
+      // Media: constrain for stability
+      const local = await navigator.mediaDevices.getUserMedia({
+        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+        video: { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 24, max: 30 } },
+      });
       localStreamRef.current = local;
+      // After permissions (gesture), attempt to unlock audio
+      resumeAllAudio();
       setParticipants(prev => {
         const others = prev.filter(p => p.id !== (me?.id||0));
         return [{ id: me?.id||0, name: me?.name||'Me', stream: local, isSelf: true, isMuted: !isMicOn, isCameraOn }, ...others];
@@ -65,6 +117,7 @@ const Meeting = () => {
             if ((me?.id||0) < msg.user.id) {
               callPeer(msg.user.id);
             }
+            resumeAllAudio();
           }
           if (msg.type === 'user-left' && msg.user) {
             setParticipants(prev => prev.filter(p => p.id !== msg.user.id));
@@ -121,6 +174,7 @@ const Meeting = () => {
         // proactive offers
         const current = participantsRef.current;
         current.forEach(p => { if (!p.isSelf && (me?.id||0) < Number(p.id)) callPeer(Number(p.id)); });
+        resumeAllAudio();
       };
     })();
     return () => { try { wsRef.current?.close(); } catch {} };
@@ -185,18 +239,50 @@ const Meeting = () => {
     } catch {}
   }, [participants]);
 
+  // Try to resume audio on any user gesture (autoplay policies)
+  useEffect(() => {
+    const resumeAudio = () => {
+      try {
+        const audios = document.querySelectorAll('audio');
+        audios.forEach((a: any) => { try { a.muted = false; a.play?.().catch(()=>{}); } catch {} });
+      } catch {}
+      // one-shot unlock
+      window.removeEventListener('pointerdown', resumeAudio);
+      window.removeEventListener('keydown', resumeAudio);
+      window.removeEventListener('click', resumeAudio);
+    };
+    window.addEventListener('pointerdown', resumeAudio, { once: true });
+    window.addEventListener('keydown', resumeAudio, { once: true });
+    window.addEventListener('click', resumeAudio, { once: true });
+    return () => {
+      window.removeEventListener('pointerdown', resumeAudio);
+      window.removeEventListener('keydown', resumeAudio);
+      window.removeEventListener('click', resumeAudio);
+    };
+  }, []);
+
   // WebRTC helpers
   function ensurePC(remoteId: number): RTCPeerConnection {
     let pc = peersRef.current.get(remoteId);
     if (pc) return pc;
-    pc = new RTCPeerConnection({ iceServers: rtcServersRef.current });
+    pc = new RTCPeerConnection({ iceServers: rtcServersRef.current, iceTransportPolicy: 'all' });
     // add local tracks
     const local = localStreamRef.current;
     local?.getTracks().forEach(t => pc!.addTrack(t, local));
+    setTimeout(() => tunePeerSenders(pc), 0);
     pc.ontrack = (ev) => {
-      const stream = ev.streams && ev.streams[0] ? ev.streams[0] : new MediaStream([ev.track]);
+      // Merge tracks into a persistent MediaStream so both audio and video stay attached
+      let stream: MediaStream | undefined = (ev.streams && ev.streams[0]) || streamsRef.current.get(remoteId);
+      if (!stream) {
+        stream = new MediaStream();
+      }
+      if (!stream.getTracks().includes(ev.track)) {
+        try { stream.addTrack(ev.track); } catch {}
+      }
       streamsRef.current.set(remoteId, stream);
-      setParticipants(prev => prev.map(p => p.id === remoteId ? { ...p, stream, isCameraOn: true } : p));
+      setParticipants(prev => prev.map(p => p.id === remoteId ? { ...p, stream, isCameraOn: p.isCameraOn ?? (ev.track.kind === 'video' ? true : p.isCameraOn) } : p));
+      // Try to start audio as soon as any track arrives
+      resumeAllAudio();
       // react to remote track state to keep UI in sync without refresh
       const tr = ev.track;
       if (tr && tr.kind === 'video') {
@@ -216,6 +302,22 @@ const Meeting = () => {
     };
     peersRef.current.set(remoteId, pc);
     return pc;
+  }
+
+  function tunePeerSenders(pc: RTCPeerConnection) {
+    try {
+      pc.getSenders().forEach((sender) => {
+        const p = sender.getParameters();
+        if (!p.encodings || p.encodings.length === 0) p.encodings = [{} as RTCRtpEncodingParameters];
+        if (sender.track?.kind === 'video') {
+          const isPresenting = presenterId === (me?.id || 0);
+          const maxBitrate = isPresenting ? 1800000 : 650000;
+          p.encodings[0].maxBitrate = maxBitrate;
+          try { sender.setParameters(p); } catch {}
+          try { (sender.track as any).contentHint = isPresenting ? 'detail' : 'motion'; } catch {}
+        }
+      });
+    } catch {}
   }
 
   // keep latest participants for ws open
@@ -267,12 +369,14 @@ const Meeting = () => {
     async function doShare() {
       if (isScreenSharing) {
         try {
-          const screen = await navigator.mediaDevices.getDisplayMedia({ video: true });
+          const screen = await navigator.mediaDevices.getDisplayMedia({ video: { frameRate: { ideal: 24, max: 30 } }, audio: false });
           screenStreamRef.current = screen;
           const track = screen.getVideoTracks()[0];
+          try { (track as any).contentHint = 'detail'; } catch {}
           peersRef.current.forEach(pc => {
             const sender = pc.getSenders().find(s => s.track && s.track.kind === 'video');
             if (sender) sender.replaceTrack(track);
+            tunePeerSenders(pc);
           });
           // update local preview
           setParticipants(prev => prev.map(p => p.isSelf ? { ...p, stream: new MediaStream([track, ...(localStreamRef.current?.getAudioTracks()||[])]) } : p));
@@ -284,9 +388,11 @@ const Meeting = () => {
         // restore camera
         const cam = localStreamRef.current?.getVideoTracks()[0];
         if (cam) {
+          try { (cam as any).contentHint = 'motion'; } catch {}
           peersRef.current.forEach(pc => {
             const sender = pc.getSenders().find(s => s.track && s.track.kind === 'video');
             if (sender) sender.replaceTrack(cam);
+            tunePeerSenders(pc);
           });
           setParticipants(prev => prev.map(p => p.isSelf ? { ...p, stream: localStreamRef.current || p.stream } : p));
           try { screenStreamRef.current?.getTracks().forEach(t => t.stop()); } catch {}
@@ -294,9 +400,15 @@ const Meeting = () => {
         if (presenterId === (me?.id || null)) setPresenterId(null);
         wsRef.current?.send(JSON.stringify({ type: 'screen-share-stop', data: {} }));
       }
+      // Try to keep audio alive across transitions
+      resumeAllAudio();
     }
     doShare();
+    // resume video playback if needed
+    setTimeout(() => { try { document.querySelectorAll('video').forEach((v:any)=>v?.play?.().catch(()=>{})); } catch {} }, 0);
   }, [isScreenSharing]);
+
+  useEffect(() => { try { peersRef.current.forEach((pc)=>tunePeerSenders(pc)); } catch {} }, [presenterId, isCameraOn]);
 
   // keep participants ref fresh for ws open usage
   useEffect(() => { participantsRef.current = participants; }, [participants]);
@@ -306,7 +418,16 @@ const Meeting = () => {
       <header className="h-14 border-b bg-card px-6 flex items-center justify-between">
         <div className="flex items-center gap-3">
           <h1 className="font-semibold">Meeting</h1>
-          <div className="px-3 py-1 bg-muted rounded-md text-sm font-mono">{code}</div>
+          <div className="flex items-center gap-2">
+            <div className="px-3 py-1 bg-muted rounded-md text-sm font-mono select-all">{code}</div>
+            <button
+              onClick={handleCopyCode}
+              title="Copy meeting code"
+              className="inline-flex items-center justify-center w-7 h-7 rounded-md bg-secondary hover:bg-secondary/80 border border-border"
+            >
+              {copied ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
+            </button>
+          </div>
         </div>
         <div className="text-sm text-muted-foreground">
           {new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
@@ -318,7 +439,12 @@ const Meeting = () => {
           <VideoGrid
             participants={participants}
             isScreenSharing={!!presenterId}
-            screenShare={presenterId ? { stream: presenterId === (me?.id||0) ? (screenStreamRef.current || localStreamRef.current!) : (streamsRef.current.get(presenterId) || new MediaStream()), ownerName: participants.find(p => Number(p.id) === presenterId)?.name || 'Presenter' } : null}
+            screenShare={presenterId ? {
+              stream: presenterId === (me?.id||0) ? (screenStreamRef.current || localStreamRef.current!) : (streamsRef.current.get(presenterId) || new MediaStream()),
+              ownerName: participants.find(p => Number(p.id) === presenterId)?.name || 'Presenter',
+              isSelf: presenterId === (me?.id||0),
+              onStop: () => setIsScreenSharing(false),
+            } : null}
           />
           
           <MeetingControls
@@ -327,8 +453,8 @@ const Meeting = () => {
             isScreenSharing={isScreenSharing}
             showChat={showChat}
             showParticipants={showParticipants}
-            onToggleCamera={() => { setIsCameraOn(!isCameraOn); wsRef.current?.send(JSON.stringify({ type: !isCameraOn ? 'camera-on' : 'camera-off', data: {} })); }}
-            onToggleMic={() => { setIsMicOn(!isMicOn); wsRef.current?.send(JSON.stringify({ type: !isMicOn ? 'unmute' : 'mute', data: {} })); }}
+            onToggleCamera={() => { const next = !isCameraOn; setIsCameraOn(next); wsRef.current?.send(JSON.stringify({ type: next ? 'camera-on' : 'camera-off', data: {} })); }}
+            onToggleMic={() => { const next = !isMicOn; setIsMicOn(next); wsRef.current?.send(JSON.stringify({ type: next ? 'unmute' : 'mute', data: {} })); }}
             onToggleScreenShare={() => setIsScreenSharing(!isScreenSharing)}
             onToggleChat={() => setShowChat(!showChat)}
             onToggleParticipants={() => setShowParticipants(!showParticipants)}

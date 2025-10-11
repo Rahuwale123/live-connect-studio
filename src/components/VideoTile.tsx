@@ -12,10 +12,12 @@ interface TileParticipant {
 
 interface VideoTileProps {
   participant: TileParticipant;
+  playAudio?: boolean;
 }
 
-const VideoTile = ({ participant }: VideoTileProps) => {
+const VideoTile = ({ participant, playAudio = true }: VideoTileProps) => {
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
 
   // Ensure srcObject binds on mount and when camera state toggles
   useEffect(() => {
@@ -33,10 +35,24 @@ const VideoTile = ({ participant }: VideoTileProps) => {
     }
   }, [participant.stream, participant.isCameraOn]);
 
+  // Bind hidden audio element to remote streams for playback
+  useEffect(() => {
+    const a = audioRef.current;
+    if (!a) return;
+    if (!participant.isSelf && playAudio && participant.stream) {
+      if (a.srcObject !== participant.stream) a.srcObject = participant.stream as any;
+      a.autoplay = true;
+      a.muted = !!participant.isMuted;
+      a.play?.().catch(()=>{});
+    } else {
+      try { a.pause?.(); } catch {}
+    }
+  }, [participant.stream, participant.isSelf, participant.isMuted, playAudio]);
+
   const showAvatar = !participant.stream || participant.isCameraOn === false;
 
   return (
-    <div className="relative bg-secondary rounded-xl overflow-hidden shadow-md group">
+    <div className="relative bg-black rounded-2xl overflow-hidden shadow-xl w-full h-full ring-1 ring-white/20 ring-offset-1 ring-offset-black/40">
       <div className="absolute inset-0 flex items-center justify-center">
         {showAvatar ? (
           <div className="w-20 h-20 bg-primary/10 rounded-full flex items-center justify-center">
@@ -54,28 +70,25 @@ const VideoTile = ({ participant }: VideoTileProps) => {
         )}
       </div>
 
-      <div className="absolute bottom-0 left-0 right-0 p-3 bg-gradient-to-t from-black/50 to-transparent opacity-0 group-hover:opacity-100 transition-opacity">
-        <div className="flex items-center justify-between">
-          <span className="text-white text-sm font-medium truncate">{participant.name}</span>
-          <div className="flex-shrink-0">
-            {participant.isMuted ? (
-              <div className="p-1.5 bg-destructive rounded-full">
-                <MicOff className="w-3 h-3 text-white" />
-              </div>
-            ) : (
-              <div className="p-1.5 bg-primary rounded-full">
-                <Mic className="w-3 h-3 text-white" />
-              </div>
-            )}
-          </div>
-        </div>
-      </div>
-
-      <div className="absolute top-3 left-3">
-        <span className="px-2 py-1 bg-black/50 text-white text-xs rounded-md backdrop-blur-sm">
+      {/* Bottom-left name pill */}
+      <div className="absolute left-3 bottom-3">
+        <span className="px-2.5 py-1 bg-black/60 text-white text-xs rounded-md backdrop-blur-sm">
           {participant.name}
         </span>
       </div>
+      {/* Top-right mic status */}
+      <div className="absolute right-3 top-3">
+        {participant.isMuted ? (
+          <div className="p-1.5 bg-black/60 rounded-full">
+            <MicOff className="w-4 h-4 text-white" />
+          </div>
+        ) : (
+          <div className="p-1.5 bg-black/60 rounded-full">
+            <Mic className="w-4 h-4 text-white" />
+          </div>
+        )}
+      </div>
+      {!participant.isSelf && <audio ref={audioRef} className="hidden" />}
     </div>
   );
 };
