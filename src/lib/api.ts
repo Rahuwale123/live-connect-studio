@@ -1,4 +1,4 @@
-export const BASE_API = 'http://54.92.134.79:8000';
+export const BASE_API = 'https://54.92.134.79.nip.io';
 
 export interface User { id: number; name: string; email: string; created_at: string; }
 export interface Participant { id: number; name: string; }
