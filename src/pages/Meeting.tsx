@@ -1,34 +1,48 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Copy, Check } from "lucide-react";
 import { useParams, useNavigate } from "react-router-dom";
 import VideoGrid, { GridParticipant } from "@/components/VideoGrid";
 import MeetingControls from "@/components/MeetingControls";
 import ChatPanel from "@/components/ChatPanel";
 import ParticipantPanel from "@/components/ParticipantPanel";
-import { BASE_API, getToken, getUser, joinMeeting as apiJoin, listParticipants as apiList, getChat as apiGetChat, wsUrl, getTurn } from "@/lib/api";
+import { Button } from "@/components/ui/button";
+import useAuthGuard from "@/hooks/use-auth-guard";
+import { getToken, getUser, joinMeeting as apiJoin, getChat as apiGetChat, wsUrl, getTurn, endMeeting as apiEndMeeting } from "@/lib/api";
 
 const Meeting = () => {
   const { code } = useParams();
   const navigate = useNavigate();
   const [isCameraOn, setIsCameraOn] = useState(true);
-  const [isMicOn, setIsMicOn] = useState(false);
+  const [isMicOn, setIsMicOn] = useState(true);
   const [isScreenSharing, setIsScreenSharing] = useState(false);
   const [presenterId, setPresenterId] = useState<number | null>(null);
   const [showChat, setShowChat] = useState(false);
   const [showParticipants, setShowParticipants] = useState(false);
   const [unread, setUnread] = useState(0);
-  const [audioEnabled, setAudioEnabled] = useState(true);
   const [participants, setParticipants] = useState<GridParticipant[]>([]);
   const [messages, setMessages] = useState<{id:string; sender:string; text:string; time:string; isSelf:boolean}[]>([]);
+  const [isHost, setIsHost] = useState(false);
+  const [showLeaveOptions, setShowLeaveOptions] = useState(false);
+  const [endingMeeting, setEndingMeeting] = useState(false);
+  const [leaveError, setLeaveError] = useState<string | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const peersRef = useRef<Map<number, RTCPeerConnection>>(new Map());
   const streamsRef = useRef<Map<number, MediaStream>>(new Map());
   const localStreamRef = useRef<MediaStream | null>(null);
   const screenStreamRef = useRef<MediaStream | null>(null);
   const participantsRef = useRef<GridParticipant[]>([]);
+  const micStateRef = useRef(isMicOn);
+  const cameraStateRef = useRef(isCameraOn);
   const rtcServersRef = useRef<any[]>([]);
-  const me = getUser();
+  const [currentUser, setCurrentUser] = useState(() => getUser());
+  const authReady = useAuthGuard();
   const [copied, setCopied] = useState(false);
+
+  useEffect(() => {
+    if (authReady) {
+      setCurrentUser(getUser());
+    }
+  }, [authReady]);
 
   const handleCopyCode = async () => {
     try {
@@ -39,28 +53,29 @@ const Meeting = () => {
     } catch {}
   };
 
-  const [showAudioGate, setShowAudioGate] = useState(false);
-  // Helper: aggressively try to start all remote audio elements; show gate if blocked
+  // Helper: aggressively try to start all remote audio elements without surfacing UI prompts
   function resumeAllAudio() {
     try {
       const audios = document.querySelectorAll('audio');
-      let anyBlocked = false;
-      const plays: Promise<any>[] = [];
-      audios.forEach((a: any) => {
+      const plays: Promise<unknown>[] = [];
+      audios.forEach((element) => {
+        const audio = element as HTMLAudioElement;
         try {
-          a.muted = false; a.autoplay = true;
-          const p = a.play?.();
-          if (p && typeof p.then === 'function') {
-            plays.push(p.catch(()=>{ anyBlocked = true; }));
+          audio.autoplay = true;
+          const playAttempt = audio.play?.();
+          if (playAttempt && typeof playAttempt.then === "function") {
+            plays.push(playAttempt.catch(() => { /* ignore blocked play */ }));
           }
-        } catch { anyBlocked = true; }
+        } catch {
+          // ignore playback errors; browser will surface if user interaction is needed
+        }
       });
       if (plays.length) {
-        Promise.allSettled(plays).then(() => { if (anyBlocked) setShowAudioGate(true); else setShowAudioGate(false); });
-      } else {
-        setShowAudioGate(false);
+        Promise.allSettled(plays).catch(() => {});
       }
-    } catch { setShowAudioGate(true); }
+    } catch {
+      // noop
+    }
   }
 
   // On mount, attempt a short retry loop to auto-start audio
@@ -69,18 +84,25 @@ const Meeting = () => {
     const id = window.setInterval(() => {
       tries += 1;
       resumeAllAudio();
-      if (tries >= 8) window.clearInterval(id);
+      if (tries >= 6) window.clearInterval(id);
     }, 750);
     return () => window.clearInterval(id);
   }, []);
 
   useEffect(() => {
+    if (!authReady) return;
     if (!code) return;
     const token = getToken();
     if (!token) { navigate('/login'); return; }
+    const user = currentUser || getUser();
+    if (!user) {
+      navigate('/login', { replace: true });
+      return;
+    }
     (async () => {
       try {
         const join = await apiJoin(code);
+        setIsHost(join.host_id === user.id);
         setParticipants(join.participants.map(p => ({ id: p.id, name: p.name })));
       } catch (e) {
         navigate('/home');
@@ -92,17 +114,39 @@ const Meeting = () => {
         setMessages(hist.map(h => ({ id: String(h.id), sender: h.name, text: h.message, time: new Date(h.timestamp).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}), isSelf: false })));
       } catch (e) { console.warn('Chat history unavailable', e); }
       // Media: constrain for stability
-      const local = await navigator.mediaDevices.getUserMedia({
-        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
-        video: { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 24, max: 30 } },
-      });
-      localStreamRef.current = local;
-      // After permissions (gesture), attempt to unlock audio
-      resumeAllAudio();
+      let local: MediaStream | null = null;
+      try {
+        local = await navigator.mediaDevices.getUserMedia({
+          audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+          video: { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 24, max: 30 } },
+        });
+        localStreamRef.current = local;
+        // After permissions (gesture), attempt to unlock audio
+        resumeAllAudio();
+      } catch (err) {
+        console.warn('Media permissions not granted or unavailable', err);
+        localStreamRef.current = null;
+      }
+
+      const effectiveMicOn = local ? isMicOn : false;
+      const effectiveCamOn = local ? isCameraOn : false;
       setParticipants(prev => {
-        const others = prev.filter(p => p.id !== (me?.id||0));
-        return [{ id: me?.id||0, name: me?.name||'Me', stream: local, isSelf: true, isMuted: !isMicOn, isCameraOn }, ...others];
+        const selfId = user.id;
+        const others = prev.filter(p => Number(p.id) !== selfId);
+        const selfEntry: GridParticipant = {
+          id: selfId,
+          name: user.name,
+          stream: local ?? undefined,
+          isSelf: true,
+          isMuted: !effectiveMicOn,
+          isCameraOn: effectiveCamOn,
+        };
+        return [selfEntry, ...others];
       });
+      if (!local) {
+        setIsMicOn(false);
+        setIsCameraOn(false);
+      }
 
       try { const cfg = await getTurn(); rtcServersRef.current = cfg.iceServers || []; } catch {}
 
@@ -114,7 +158,7 @@ const Meeting = () => {
           if (msg.type === 'meeting-ended') { navigate('/home'); return; }
           if (msg.type === 'user-joined' && msg.user) {
             setParticipants(prev => prev.some(p => p.id === msg.user.id) ? prev : [...prev, { id: msg.user.id, name: msg.user.name }]);
-            if ((me?.id||0) < msg.user.id) {
+            if ((currentUser?.id||0) < msg.user.id) {
               callPeer(msg.user.id);
             }
             resumeAllAudio();
@@ -132,7 +176,7 @@ const Meeting = () => {
               const map = new Map<number, GridParticipant>();
               [...prev, ...snap.map((p:any) => ({ id: p.id, name: p.name, isMuted: p.mic === false, isCameraOn: p.cam !== false }))].forEach(p => map.set(Number(p.id), { ...map.get(Number(p.id)), ...p } as any));
               const arr = Array.from(map.values());
-              const self = arr.find(p => Number(p.id) === (me?.id||0));
+              const self = arr.find(p => Number(p.id) === (currentUser?.id||0));
               if (self && localStreamRef.current) self.stream = localStreamRef.current;
               return arr;
             });
@@ -140,14 +184,16 @@ const Meeting = () => {
             // Try initiating to larger-ids after snapshot
             setTimeout(() => {
               const current = participantsRef.current;
-              current.forEach(p => { if (!p.isSelf && (me?.id||0) < Number(p.id)) callPeer(Number(p.id)); });
+              current.forEach(p => { if (!p.isSelf && (currentUser?.id||0) < Number(p.id)) callPeer(Number(p.id)); });
             }, 100);
           }
           if (msg.type === 'screen-share-start') {
-            setPresenterId(msg.sender?.id ?? null);
+            const senderId = typeof msg.sender?.id === "number" ? msg.sender.id : null;
+            setPresenterId(senderId);
           }
           if (msg.type === 'screen-share-stop') {
-            if ((msg.sender?.id ?? null) === presenterId) setPresenterId(null);
+            const senderId = typeof msg.sender?.id === "number" ? msg.sender.id : null;
+            setPresenterId((prev) => ((senderId == null || prev === senderId) ? null : prev));
           }
           if (msg.type === 'media') {
             const media = msg.data || {};
@@ -156,7 +202,7 @@ const Meeting = () => {
           }
           if (msg.type === 'chat') {
             const senderId = msg.sender?.id;
-            if (senderId && me && senderId === me.id) return; // ignore echo of own message
+            if (senderId && currentUser && senderId === currentUser.id) return; // ignore echo of own message
             const sender = msg.sender?.name || 'User';
             const text = msg.data?.text || '';
             const time = msg.data?.timestamp ? new Date(msg.data.timestamp).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}) : new Date().toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
@@ -164,7 +210,7 @@ const Meeting = () => {
             if (!showChat) setUnread((u) => Math.min(99, u + 1));
           }
           const to = msg.data?.to;
-          if (to && me && to !== me.id) return;
+          if (to && currentUser && to !== currentUser.id) return;
           if (msg.type === 'offer') handleOffer(msg.sender.id, msg.data.sdp);
           if (msg.type === 'answer') handleAnswer(msg.sender.id, msg.data.sdp);
           if (msg.type === 'ice-candidate') handleCandidate(msg.sender.id, msg.data.candidate);
@@ -173,12 +219,20 @@ const Meeting = () => {
       ws.onopen = () => {
         // proactive offers
         const current = participantsRef.current;
-        current.forEach(p => { if (!p.isSelf && (me?.id||0) < Number(p.id)) callPeer(Number(p.id)); });
+        current.forEach(p => { if (!p.isSelf && (currentUser?.id||0) < Number(p.id)) callPeer(Number(p.id)); });
+        const audioTracks = localStreamRef.current?.getAudioTracks() || [];
+        const videoTracks = localStreamRef.current?.getVideoTracks() || [];
+        if (!micStateRef.current || !audioTracks.length || audioTracks.every(t => !t.enabled)) {
+          ws.send(JSON.stringify({ type: 'mute', data: {} }));
+        }
+        if (!cameraStateRef.current || !videoTracks.length || videoTracks.every(t => !t.enabled)) {
+          ws.send(JSON.stringify({ type: 'camera-off', data: {} }));
+        }
         resumeAllAudio();
       };
     })();
     return () => { try { wsRef.current?.close(); } catch {} };
-  }, [code]);
+  }, [code, authReady]);
 
   // Ensure devices are turned off on tab close/refresh
   useEffect(() => {
@@ -193,6 +247,9 @@ const Meeting = () => {
   }, []);
 
   const handleLeaveMeeting = () => {
+    setShowLeaveOptions(false);
+    setLeaveError(null);
+    setEndingMeeting(false);
     try {
       // Close peer connections
       peersRef.current.forEach((pc) => { try { pc.close(); } catch {} });
@@ -228,6 +285,39 @@ const Meeting = () => {
     setMessages(prev => [...prev, { id: String(prev.length+1), sender: 'You', text, time: new Date().toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}), isSelf: true }]);
   };
 
+  const handleLeaveClick = () => {
+    if (isHost) {
+      setLeaveError(null);
+      setShowLeaveOptions(true);
+    } else {
+      handleLeaveMeeting();
+    }
+  };
+
+  const handleEndForMe = () => {
+    handleLeaveMeeting();
+  };
+
+  const handleEndForEveryone = async () => {
+    if (!code || endingMeeting) return;
+    setLeaveError(null);
+    setEndingMeeting(true);
+    try {
+      await apiEndMeeting(code);
+      handleLeaveMeeting();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Failed to end meeting for everyone.";
+      setLeaveError(message);
+    } finally {
+      setEndingMeeting(false);
+    }
+  };
+
+  const handleCancelLeave = () => {
+    setShowLeaveOptions(false);
+    setLeaveError(null);
+  };
+
   // Reset unread when opening chat
   useEffect(() => { if (showChat) setUnread(0); }, [showChat]);
 
@@ -244,7 +334,15 @@ const Meeting = () => {
     const resumeAudio = () => {
       try {
         const audios = document.querySelectorAll('audio');
-        audios.forEach((a: any) => { try { a.muted = false; a.play?.().catch(()=>{}); } catch {} });
+        audios.forEach((element) => {
+          const audio = element as HTMLAudioElement;
+          try {
+            const attempt = audio.play?.();
+            attempt?.catch(() => {});
+          } catch {
+            // ignore
+          }
+        });
       } catch {}
       // one-shot unlock
       window.removeEventListener('pointerdown', resumeAudio);
@@ -310,7 +408,7 @@ const Meeting = () => {
         const p = sender.getParameters();
         if (!p.encodings || p.encodings.length === 0) p.encodings = [{} as RTCRtpEncodingParameters];
         if (sender.track?.kind === 'video') {
-          const isPresenting = presenterId === (me?.id || 0);
+          const isPresenting = presenterId === (currentUser?.id || 0);
           const maxBitrate = isPresenting ? 1800000 : 650000;
           p.encodings[0].maxBitrate = maxBitrate;
           try { sender.setParameters(p); } catch {}
@@ -352,6 +450,7 @@ const Meeting = () => {
 
   // React to mic/camera toggles
   useEffect(() => {
+    micStateRef.current = isMicOn;
     const local = localStreamRef.current;
     if (!local) return;
     local.getAudioTracks().forEach(t => t.enabled = isMicOn);
@@ -359,6 +458,7 @@ const Meeting = () => {
   }, [isMicOn]);
 
   useEffect(() => {
+    cameraStateRef.current = isCameraOn;
     const local = localStreamRef.current;
     if (!local) return;
     local.getVideoTracks().forEach(t => t.enabled = isCameraOn);
@@ -381,7 +481,7 @@ const Meeting = () => {
           // update local preview
           setParticipants(prev => prev.map(p => p.isSelf ? { ...p, stream: new MediaStream([track, ...(localStreamRef.current?.getAudioTracks()||[])]) } : p));
           track.onended = () => setIsScreenSharing(false);
-          setPresenterId(me?.id || null);
+          setPresenterId(currentUser?.id || null);
           wsRef.current?.send(JSON.stringify({ type: 'screen-share-start', data: {} }));
         } catch { setIsScreenSharing(false); }
       } else {
@@ -397,7 +497,7 @@ const Meeting = () => {
           setParticipants(prev => prev.map(p => p.isSelf ? { ...p, stream: localStreamRef.current || p.stream } : p));
           try { screenStreamRef.current?.getTracks().forEach(t => t.stop()); } catch {}
         }
-        if (presenterId === (me?.id || null)) setPresenterId(null);
+        if (presenterId === (currentUser?.id || null)) setPresenterId(null);
         wsRef.current?.send(JSON.stringify({ type: 'screen-share-stop', data: {} }));
       }
       // Try to keep audio alive across transitions
@@ -412,6 +512,10 @@ const Meeting = () => {
 
   // keep participants ref fresh for ws open usage
   useEffect(() => { participantsRef.current = participants; }, [participants]);
+
+  if (!authReady) {
+    return null;
+  }
 
   return (
     <div className="h-screen flex flex-col bg-background">
@@ -440,9 +544,9 @@ const Meeting = () => {
             participants={participants}
             isScreenSharing={!!presenterId}
             screenShare={presenterId ? {
-              stream: presenterId === (me?.id||0) ? (screenStreamRef.current || localStreamRef.current!) : (streamsRef.current.get(presenterId) || new MediaStream()),
+              stream: presenterId === (currentUser?.id||0) ? (screenStreamRef.current || localStreamRef.current!) : (streamsRef.current.get(presenterId) || new MediaStream()),
               ownerName: participants.find(p => Number(p.id) === presenterId)?.name || 'Presenter',
-              isSelf: presenterId === (me?.id||0),
+              isSelf: presenterId === (currentUser?.id||0),
               onStop: () => setIsScreenSharing(false),
             } : null}
           />
@@ -458,7 +562,7 @@ const Meeting = () => {
             onToggleScreenShare={() => setIsScreenSharing(!isScreenSharing)}
             onToggleChat={() => setShowChat(!showChat)}
             onToggleParticipants={() => setShowParticipants(!showParticipants)}
-            onLeaveMeeting={handleLeaveMeeting}
+            onLeaveMeeting={handleLeaveClick}
             unreadCount={unread}
           />
         </div>
@@ -466,6 +570,34 @@ const Meeting = () => {
         {showChat && <ChatPanel onClose={() => setShowChat(false)} messages={messages} onSend={handleSendChat} />}
         {showParticipants && <ParticipantPanel onClose={() => setShowParticipants(false)} participants={participants} />}
       </div>
+      {showLeaveOptions && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+          <div className="w-full max-w-md space-y-4 rounded-xl border border-border bg-card p-6 shadow-2xl">
+            <div>
+              <h2 className="text-lg font-semibold">End meeting?</h2>
+              <p className="mt-1 text-sm text-muted-foreground">
+                Choose whether to leave just for yourself or end the meeting for everyone.
+              </p>
+            </div>
+            {leaveError && (
+              <div className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+                {leaveError}
+              </div>
+            )}
+            <div className="flex flex-wrap items-center justify-end gap-2">
+              <Button variant="ghost" onClick={handleCancelLeave} disabled={endingMeeting}>
+                Cancel
+              </Button>
+              <Button variant="secondary" onClick={handleEndForMe} disabled={endingMeeting}>
+                End for me
+              </Button>
+              <Button variant="destructive" onClick={handleEndForEveryone} disabled={endingMeeting}>
+                {endingMeeting ? "Ending…" : "End for everyone"}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

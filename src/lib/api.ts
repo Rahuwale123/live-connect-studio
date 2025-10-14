@@ -3,6 +3,7 @@ export const BASE_API = 'http://localhost:8000';
 export interface User { id: number; name: string; email: string; created_at: string; }
 export interface Participant { id: number; name: string; }
 export interface ChatMessage { id: number; user_id: number; name: string; message: string; timestamp: string; }
+export interface JoinMeetingResponse { message: string; participants: Participant[]; host_id: number; }
 
 export function getToken(): string | null { return localStorage.getItem('token'); }
 export function setToken(t: string) { localStorage.setItem('token', t); }
@@ -24,11 +25,8 @@ async function request<T>(path: string, opts: RequestInit = {}, auth = true): Pr
 }
 
 export async function signup(name: string, email: string, password: string) {
-  const data = await request<{ token: string }>(`/auth/signup`, { method: 'POST', body: JSON.stringify({ name, email, password }) }, false);
-  setToken(data.token);
-  const profile = await request<User>(`/user/profile`);
-  setUser(profile);
-  return profile;
+  await request<{ token: string }>(`/auth/signup`, { method: 'POST', body: JSON.stringify({ name, email, password }) }, false);
+  clearAuth();
 }
 
 export async function login(email: string, password: string) {
@@ -43,7 +41,7 @@ export async function createMeeting(title?: string) {
 }
 
 export async function joinMeeting(meeting_id: string) {
-  return request<{ message: string; participants: Participant[] }>(`/meeting/join`, { method: 'POST', body: JSON.stringify({ meeting_id }) });
+  return request<JoinMeetingResponse>(`/meeting/join`, { method: 'POST', body: JSON.stringify({ meeting_id }) });
 }
 
 export async function listParticipants(meeting_id: string) {
@@ -56,6 +54,14 @@ export async function getChat(meeting_id: string) {
 }
 
 export async function getTurn() { return request<{ iceServers: any[] }>(`/config/turn`); }
+
+export async function endMeeting(meeting_id: string) {
+  return request<{ message: string }>(`/meeting/end`, { method: 'POST', body: JSON.stringify({ meeting_id }) });
+}
+
+export async function getProfile() {
+  return request<User>(`/user/profile`);
+}
 
 export function wsUrl(meeting_id: string): string {
   const t = getToken();

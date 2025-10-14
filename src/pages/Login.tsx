@@ -1,11 +1,11 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { Video } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { login as apiLogin } from "@/lib/api";
+import { login as apiLogin, getToken, getProfile, setUser, clearAuth } from "@/lib/api";
 
 const Login = () => {
   const navigate = useNavigate();
@@ -13,6 +13,25 @@ const Login = () => {
   const [password, setPassword] = useState("");
 
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    async function checkSession() {
+      const token = getToken();
+      if (!token) return;
+      try {
+        const profile = await getProfile();
+        if (!active) return;
+        setUser(profile);
+        navigate("/home", { replace: true });
+      } catch {
+        clearAuth();
+      }
+    }
+    checkSession();
+    return () => { active = false; };
+  }, [navigate]);
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
