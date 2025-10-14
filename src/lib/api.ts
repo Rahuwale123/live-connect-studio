@@ -1,4 +1,18 @@
-export const BASE_API = 'https://54.92.134.79.nip.io/api';
+const DEFAULT_BASE = "https://54.92.134.79.nip.io";
+
+const resolveBaseApi = () => {
+  const envBase = import.meta.env.VITE_API_BASE?.trim();
+  if (envBase) {
+    return envBase.replace(/\/$/, "");
+  }
+  if (typeof window !== "undefined" && window.location.origin) {
+    return window.location.origin.replace(/\/$/, "");
+  }
+  return DEFAULT_BASE;
+};
+
+export const BASE_API = resolveBaseApi();
+const WS_BASE = BASE_API.replace(/^http(s?)/, "ws$1");
 
 export interface User { id: number; name: string; email: string; created_at: string; }
 export interface Participant { id: number; name: string; }
@@ -65,5 +79,5 @@ export async function getProfile() {
 
 export function wsUrl(meeting_id: string): string {
   const t = getToken();
-  return `${BASE_API.replace(/^http/, 'ws')}/ws/meetings/${encodeURIComponent(meeting_id)}?token=${encodeURIComponent(t||'')}`;
+  return `${WS_BASE}/ws/meetings/${encodeURIComponent(meeting_id)}?token=${encodeURIComponent(t||'')}`;
 }
