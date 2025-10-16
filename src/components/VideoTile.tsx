@@ -8,6 +8,7 @@ interface TileParticipant {
   isMuted?: boolean;
   isCameraOn?: boolean;
   isSelf?: boolean;
+  isHost?: boolean;
 }
 
 interface VideoTileProps {
@@ -71,10 +72,15 @@ const VideoTile = ({ participant, playAudio = true }: VideoTileProps) => {
       </div>
 
       {/* Bottom-left name pill */}
-      <div className="absolute left-3 bottom-3">
+      <div className="absolute left-3 bottom-3 flex items-center gap-2">
         <span className="px-2.5 py-1 bg-black/60 text-white text-xs rounded-md backdrop-blur-sm">
           {participant.name}
         </span>
+        {participant.isHost && (
+          <span className="px-2 py-1 bg-primary/80 text-primary-foreground text-[10px] font-semibold rounded-md uppercase tracking-wide">
+            Host
+          </span>
+        )}
       </div>
       {/* Top-right mic status */}
       <div className="absolute right-3 top-3">

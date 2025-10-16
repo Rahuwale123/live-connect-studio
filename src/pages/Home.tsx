@@ -5,13 +5,11 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { createMeeting, joinMeeting, getToken } from "@/lib/api";
-import useAuthGuard from "@/hooks/use-auth-guard";
 
 const Home = () => {
   const navigate = useNavigate();
   const [meetingCode, setMeetingCode] = useState("");
 
-  const authReady = useAuthGuard();
   const [error, setError] = useState<string | null>(null);
   const handleCreateMeeting = async () => {
     setError(null);
@@ -33,10 +31,6 @@ const Home = () => {
       navigate(`/meeting/${code}`);
     } catch (err: any) { setError(err.message || 'Failed to join'); }
   };
-
-  if (!authReady) {
-    return null;
-  }
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-background to-accent/20">

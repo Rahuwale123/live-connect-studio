@@ -6,7 +6,6 @@ import MeetingControls from "@/components/MeetingControls";
 import ChatPanel from "@/components/ChatPanel";
 import ParticipantPanel from "@/components/ParticipantPanel";
 import { Button } from "@/components/ui/button";
-import useAuthGuard from "@/hooks/use-auth-guard";
 import { getToken, getUser, joinMeeting as apiJoin, getChat as apiGetChat, wsUrl, getTurn, endMeeting as apiEndMeeting } from "@/lib/api";
 
 const Meeting = () => {
@@ -35,14 +34,27 @@ const Meeting = () => {
   const cameraStateRef = useRef(isCameraOn);
   const rtcServersRef = useRef<any[]>([]);
   const [currentUser, setCurrentUser] = useState(() => getUser());
-  const authReady = useAuthGuard();
   const [copied, setCopied] = useState(false);
+  const showChatRef = useRef(showChat);
+  const presenterIdRef = useRef<number | null>(presenterId);
+  const currentUserRef = useRef(currentUser);
+  const hostIdRef = useRef<number | null>(null);
 
   useEffect(() => {
-    if (authReady) {
-      setCurrentUser(getUser());
-    }
-  }, [authReady]);
+    setCurrentUser(getUser());
+  }, []);
+
+  useEffect(() => {
+    currentUserRef.current = currentUser;
+  }, [currentUser]);
+
+  useEffect(() => {
+    showChatRef.current = showChat;
+  }, [showChat]);
+
+  useEffect(() => {
+    presenterIdRef.current = presenterId;
+  }, [presenterId]);
 
   const handleCopyCode = async () => {
     try {
@@ -51,6 +63,59 @@ const Meeting = () => {
       setCopied(true);
       window.setTimeout(() => setCopied(false), 1200);
     } catch {}
+  };
+
+  const sendSignal = (type: string, data: Record<string, unknown> = {}) => {
+    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return false;
+    wsRef.current.send(JSON.stringify({ type, data }));
+    return true;
+  };
+
+  const teardownSession = (redirectPath?: string) => {
+    try {
+      try { wsRef.current?.close(); } catch {}
+      wsRef.current = null;
+      peersRef.current.forEach((pc) => { try { pc.close(); } catch {} });
+      peersRef.current.clear();
+      streamsRef.current.forEach((stream) => {
+        stream.getTracks().forEach((track) => {
+          try { track.stop(); } catch {}
+        });
+      });
+      streamsRef.current.clear();
+      participantsRef.current = [];
+      const local = localStreamRef.current;
+      if (local) {
+        local.getTracks().forEach((track) => {
+          try { track.stop(); } catch {}
+        });
+      }
+      localStreamRef.current = null;
+      const screen = screenStreamRef.current;
+      if (screen) {
+        screen.getTracks().forEach((track) => {
+          try { track.stop(); } catch {}
+        });
+      }
+      screenStreamRef.current = null;
+      setIsScreenSharing(false);
+      setPresenterId(null);
+      presenterIdRef.current = null;
+      hostIdRef.current = null;
+      setParticipants([]);
+      setMessages([]);
+      setShowChat(false);
+      setShowParticipants(false);
+      setUnread(0);
+      setIsHost(false);
+      setShowLeaveOptions(false);
+      setLeaveError(null);
+      setEndingMeeting(false);
+    } finally {
+      if (redirectPath) {
+        navigate(redirectPath);
+      }
+    }
   };
 
   // Helper: aggressively try to start all remote audio elements without surfacing UI prompts
@@ -90,7 +155,6 @@ const Meeting = () => {
   }, []);
 
   useEffect(() => {
-    if (!authReady) return;
     if (!code) return;
     const token = getToken();
     if (!token) { navigate('/login'); return; }
@@ -102,8 +166,13 @@ const Meeting = () => {
     (async () => {
       try {
         const join = await apiJoin(code);
+        hostIdRef.current = typeof join.host_id === "number" ? join.host_id : null;
         setIsHost(join.host_id === user.id);
-        setParticipants(join.participants.map(p => ({ id: p.id, name: p.name })));
+        setParticipants(join.participants.map((p) => ({
+          id: p.id,
+          name: p.name,
+          isHost: p.id === join.host_id,
+        })));
       } catch (e) {
         navigate('/home');
         return;
@@ -121,6 +190,8 @@ const Meeting = () => {
           video: { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 24, max: 30 } },
         });
         localStreamRef.current = local;
+        local.getAudioTracks().forEach((track) => { track.enabled = isMicOn; });
+        local.getVideoTracks().forEach((track) => { track.enabled = isCameraOn; });
         // After permissions (gesture), attempt to unlock audio
         resumeAllAudio();
       } catch (err) {
@@ -140,6 +211,7 @@ const Meeting = () => {
           isSelf: true,
           isMuted: !effectiveMicOn,
           isCameraOn: effectiveCamOn,
+          isHost: hostIdRef.current === selfId,
         };
         return [selfEntry, ...others];
       });
@@ -155,84 +227,146 @@ const Meeting = () => {
       ws.onmessage = (ev) => {
         try {
           const msg = JSON.parse(ev.data);
-          if (msg.type === 'meeting-ended') { navigate('/home'); return; }
-          if (msg.type === 'user-joined' && msg.user) {
-            setParticipants(prev => prev.some(p => p.id === msg.user.id) ? prev : [...prev, { id: msg.user.id, name: msg.user.name }]);
-            if ((currentUser?.id||0) < msg.user.id) {
+          const selfId = currentUserRef.current?.id ?? 0;
+          if (msg.type === "meeting-ended") {
+            teardownSession("/home");
+            return;
+          }
+          if (msg.type === "user-joined" && msg.user) {
+            setParticipants((prev) => {
+              if (prev.some((p) => p.id === msg.user.id)) return prev;
+              return [
+                ...prev,
+                { id: msg.user.id, name: msg.user.name, isHost: hostIdRef.current === msg.user.id },
+              ];
+            });
+            if (selfId && selfId < msg.user.id) {
               callPeer(msg.user.id);
             }
             resumeAllAudio();
           }
-          if (msg.type === 'user-left' && msg.user) {
-            setParticipants(prev => prev.filter(p => p.id !== msg.user.id));
+          if (msg.type === "user-left" && msg.user) {
+            setParticipants((prev) => prev.filter((p) => p.id !== msg.user.id));
             const pc = peersRef.current.get(msg.user.id);
-            if (pc) { try { pc.close(); } catch {} peersRef.current.delete(msg.user.id); }
+            if (pc) {
+              try { pc.close(); } catch {}
+              peersRef.current.delete(msg.user.id);
+            }
             streamsRef.current.delete(msg.user.id);
-            if (presenterId === msg.user.id) setPresenterId(null);
+            if (presenterIdRef.current === msg.user.id) {
+              presenterIdRef.current = null;
+              setPresenterId(null);
+            }
           }
-          if (msg.type === 'room-state') {
+          if (msg.type === "room-state") {
             const snap = Array.isArray(msg.participants) ? msg.participants : [];
-            setParticipants(prev => {
+            const hostId = typeof msg.host_id === "number" ? msg.host_id : hostIdRef.current;
+            if (typeof msg.host_id === "number") {
+              hostIdRef.current = msg.host_id;
+              setIsHost(msg.host_id === selfId);
+            }
+            setParticipants((prev) => {
               const map = new Map<number, GridParticipant>();
-              [...prev, ...snap.map((p:any) => ({ id: p.id, name: p.name, isMuted: p.mic === false, isCameraOn: p.cam !== false }))].forEach(p => map.set(Number(p.id), { ...map.get(Number(p.id)), ...p } as any));
+              [...prev, ...snap.map((p: any) => ({
+                id: p.id,
+                name: p.name,
+                isMuted: p.mic === false,
+                isCameraOn: p.cam !== false,
+                isHost: hostId === p.id,
+              }))].forEach((entry) => {
+                const id = Number(entry.id);
+                const existing = map.get(id) || {};
+                map.set(id, { ...existing, ...entry });
+              });
               const arr = Array.from(map.values());
-              const self = arr.find(p => Number(p.id) === (currentUser?.id||0));
-              if (self && localStreamRef.current) self.stream = localStreamRef.current;
+              const self = arr.find((participant) => Number(participant.id) === selfId);
+              if (self) {
+                self.isSelf = true;
+                if (localStreamRef.current) self.stream = localStreamRef.current;
+              }
+              arr.sort((a, b) => {
+                const aSelf = a.isSelf ? 1 : 0;
+                const bSelf = b.isSelf ? 1 : 0;
+                if (aSelf !== bSelf) return bSelf - aSelf;
+                return Number(a.id) - Number(b.id);
+              });
               return arr;
             });
-            if (typeof msg.presenter_id === 'number') setPresenterId(msg.presenter_id);
-            // Try initiating to larger-ids after snapshot
+            if (typeof msg.presenter_id === "number") {
+              presenterIdRef.current = msg.presenter_id;
+              setPresenterId(msg.presenter_id);
+            }
             setTimeout(() => {
               const current = participantsRef.current;
-              current.forEach(p => { if (!p.isSelf && (currentUser?.id||0) < Number(p.id)) callPeer(Number(p.id)); });
+              current.forEach((participant) => {
+                const pid = Number(participant.id);
+                if (!participant.isSelf && selfId && selfId < pid) {
+                  callPeer(pid);
+                }
+              });
             }, 100);
           }
-          if (msg.type === 'screen-share-start') {
+          if (msg.type === "screen-share-start") {
             const senderId = typeof msg.sender?.id === "number" ? msg.sender.id : null;
+            presenterIdRef.current = senderId;
             setPresenterId(senderId);
           }
-          if (msg.type === 'screen-share-stop') {
+          if (msg.type === "screen-share-stop") {
             const senderId = typeof msg.sender?.id === "number" ? msg.sender.id : null;
-            setPresenterId((prev) => ((senderId == null || prev === senderId) ? null : prev));
+            if (senderId == null || presenterIdRef.current === senderId) {
+              presenterIdRef.current = null;
+              setPresenterId(null);
+            }
           }
-          if (msg.type === 'media') {
+          if (msg.type === "media") {
             const media = msg.data || {};
             const uid = msg.sender?.id;
-            if (uid) setParticipants(prev => prev.map(p => Number(p.id) === Number(uid) ? { ...p, isMuted: media.mic === false, isCameraOn: media.cam !== false } : p));
+            if (uid) {
+              setParticipants((prev) =>
+                prev.map((p) =>
+                  Number(p.id) === Number(uid)
+                    ? { ...p, isMuted: media.mic === false, isCameraOn: media.cam !== false }
+                    : p
+                )
+              );
+            }
           }
-          if (msg.type === 'chat') {
+          if (msg.type === "chat") {
             const senderId = msg.sender?.id;
-            if (senderId && currentUser && senderId === currentUser.id) return; // ignore echo of own message
-            const sender = msg.sender?.name || 'User';
-            const text = msg.data?.text || '';
-            const time = msg.data?.timestamp ? new Date(msg.data.timestamp).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}) : new Date().toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
-            setMessages(prev => [...prev, { id: String(prev.length+1), sender, text, time, isSelf: false }]);
-            if (!showChat) setUnread((u) => Math.min(99, u + 1));
+            if (senderId && currentUserRef.current && senderId === currentUserRef.current.id) return;
+            const sender = msg.sender?.name || "User";
+            const text = msg.data?.text || "";
+            const time = msg.data?.timestamp
+              ? new Date(msg.data.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+              : new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+            setMessages((prev) => [...prev, { id: String(prev.length + 1), sender, text, time, isSelf: false }]);
+            if (!showChatRef.current) setUnread((u) => Math.min(99, u + 1));
           }
           const to = msg.data?.to;
-          if (to && currentUser && to !== currentUser.id) return;
-          if (msg.type === 'offer') handleOffer(msg.sender.id, msg.data.sdp);
-          if (msg.type === 'answer') handleAnswer(msg.sender.id, msg.data.sdp);
-          if (msg.type === 'ice-candidate') handleCandidate(msg.sender.id, msg.data.candidate);
+          if (to && currentUserRef.current && to !== currentUserRef.current.id) return;
+          if (msg.type === "offer") handleOffer(msg.sender.id, msg.data.sdp);
+          if (msg.type === "answer") handleAnswer(msg.sender.id, msg.data.sdp);
+          if (msg.type === "ice-candidate") handleCandidate(msg.sender.id, msg.data.candidate);
         } catch {}
       };
       ws.onopen = () => {
-        // proactive offers
         const current = participantsRef.current;
-        current.forEach(p => { if (!p.isSelf && (currentUser?.id||0) < Number(p.id)) callPeer(Number(p.id)); });
+        const selfId = currentUserRef.current?.id ?? 0;
+        current.forEach((p) => {
+          const pid = Number(p.id);
+          if (!p.isSelf && selfId && selfId < pid) callPeer(pid);
+        });
         const audioTracks = localStreamRef.current?.getAudioTracks() || [];
         const videoTracks = localStreamRef.current?.getVideoTracks() || [];
-        if (!micStateRef.current || !audioTracks.length || audioTracks.every(t => !t.enabled)) {
-          ws.send(JSON.stringify({ type: 'mute', data: {} }));
-        }
-        if (!cameraStateRef.current || !videoTracks.length || videoTracks.every(t => !t.enabled)) {
-          ws.send(JSON.stringify({ type: 'camera-off', data: {} }));
-        }
+        const micActive = micStateRef.current && audioTracks.some((track) => track.enabled !== false);
+        const cameraActive = cameraStateRef.current && videoTracks.some((track) => track.enabled !== false);
+        sendSignal(micActive ? "unmute" : "mute");
+        sendSignal(cameraActive ? "camera-on" : "camera-off");
         resumeAllAudio();
       };
     })();
     return () => { try { wsRef.current?.close(); } catch {} };
-  }, [code, authReady]);
+  }, [code, navigate]);
 
   // Ensure devices are turned off on tab close/refresh
   useEffect(() => {
@@ -250,38 +384,11 @@ const Meeting = () => {
     setShowLeaveOptions(false);
     setLeaveError(null);
     setEndingMeeting(false);
-    try {
-      // Close peer connections
-      peersRef.current.forEach((pc) => { try { pc.close(); } catch {} });
-      peersRef.current.clear();
-      // Stop local camera/mic
-      const ls = localStreamRef.current;
-      if (ls) {
-        ls.getTracks().forEach((t) => {
-          try { t.stop(); } catch {}
-        });
-      }
-      localStreamRef.current = null;
-      // Stop any active screen share
-      const ss = screenStreamRef.current;
-      if (ss) {
-        ss.getTracks().forEach((t) => {
-          try { t.stop(); } catch {}
-        });
-      }
-      screenStreamRef.current = null;
-      // Close websocket
-      try { wsRef.current?.close(); } catch {}
-      // Update UI state to reflect camera off
-      setParticipants((prev) => prev.map((p) => p.isSelf ? { ...p, stream: undefined, isCameraOn: false } : p));
-    } finally {
-      navigate("/home");
-    }
+    teardownSession("/home");
   };
 
   const handleSendChat = (text: string) => {
-    if (!wsRef.current) return;
-    wsRef.current.send(JSON.stringify({ type: 'chat', data: { text } }));
+    if (!sendSignal("chat", { text })) return;
     setMessages(prev => [...prev, { id: String(prev.length+1), sender: 'You', text, time: new Date().toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}), isSelf: true }]);
   };
 
@@ -316,6 +423,18 @@ const Meeting = () => {
   const handleCancelLeave = () => {
     setShowLeaveOptions(false);
     setLeaveError(null);
+  };
+
+  const handleToggleMic = () => {
+    const next = !isMicOn;
+    setIsMicOn(next);
+    sendSignal(next ? "unmute" : "mute");
+  };
+
+  const handleToggleCamera = () => {
+    const next = !isCameraOn;
+    setIsCameraOn(next);
+    sendSignal(next ? "camera-on" : "camera-off");
   };
 
   // Reset unread when opening chat
@@ -408,7 +527,8 @@ const Meeting = () => {
         const p = sender.getParameters();
         if (!p.encodings || p.encodings.length === 0) p.encodings = [{} as RTCRtpEncodingParameters];
         if (sender.track?.kind === 'video') {
-          const isPresenting = presenterId === (currentUser?.id || 0);
+          const selfId = currentUserRef.current?.id ?? 0;
+          const isPresenting = presenterId === selfId;
           const maxBitrate = isPresenting ? 1800000 : 650000;
           p.encodings[0].maxBitrate = maxBitrate;
           try { sender.setParameters(p); } catch {}
@@ -425,7 +545,7 @@ const Meeting = () => {
     const pc = ensurePC(remoteId);
     const offer = await pc.createOffer({ offerToReceiveAudio: true, offerToReceiveVideo: true });
     await pc.setLocalDescription(offer);
-    wsRef.current?.send(JSON.stringify({ type: 'offer', data: { to: remoteId, sdp: offer } }));
+    sendSignal("offer", { to: remoteId, sdp: offer });
   }
 
   async function handleOffer(remoteId: number, offer: any) {
@@ -433,7 +553,7 @@ const Meeting = () => {
     await pc.setRemoteDescription(offer);
     const answer = await pc.createAnswer();
     await pc.setLocalDescription(answer);
-    wsRef.current?.send(JSON.stringify({ type: 'answer', data: { to: remoteId, sdp: answer } }));
+    sendSignal("answer", { to: remoteId, sdp: answer });
   }
 
   async function handleAnswer(remoteId: number, answer: any) {
@@ -481,8 +601,10 @@ const Meeting = () => {
           // update local preview
           setParticipants(prev => prev.map(p => p.isSelf ? { ...p, stream: new MediaStream([track, ...(localStreamRef.current?.getAudioTracks()||[])]) } : p));
           track.onended = () => setIsScreenSharing(false);
-          setPresenterId(currentUser?.id || null);
-          wsRef.current?.send(JSON.stringify({ type: 'screen-share-start', data: {} }));
+          const selfId = currentUserRef.current?.id || null;
+          presenterIdRef.current = selfId;
+          setPresenterId(selfId);
+          sendSignal("screen-share-start");
         } catch { setIsScreenSharing(false); }
       } else {
         // restore camera
@@ -497,8 +619,12 @@ const Meeting = () => {
           setParticipants(prev => prev.map(p => p.isSelf ? { ...p, stream: localStreamRef.current || p.stream } : p));
           try { screenStreamRef.current?.getTracks().forEach(t => t.stop()); } catch {}
         }
-        if (presenterId === (currentUser?.id || null)) setPresenterId(null);
-        wsRef.current?.send(JSON.stringify({ type: 'screen-share-stop', data: {} }));
+        const selfId = currentUserRef.current?.id || null;
+        if (presenterIdRef.current && presenterIdRef.current === selfId) {
+          presenterIdRef.current = null;
+          setPresenterId(null);
+        }
+        sendSignal("screen-share-stop");
       }
       // Try to keep audio alive across transitions
       resumeAllAudio();
@@ -513,9 +639,7 @@ const Meeting = () => {
   // keep participants ref fresh for ws open usage
   useEffect(() => { participantsRef.current = participants; }, [participants]);
 
-  if (!authReady) {
-    return null;
-  }
+  const currentUserId = currentUser?.id ?? currentUserRef.current?.id ?? 0;
 
   return (
     <div className="h-screen flex flex-col bg-background">
@@ -544,9 +668,9 @@ const Meeting = () => {
             participants={participants}
             isScreenSharing={!!presenterId}
             screenShare={presenterId ? {
-              stream: presenterId === (currentUser?.id||0) ? (screenStreamRef.current || localStreamRef.current!) : (streamsRef.current.get(presenterId) || new MediaStream()),
+              stream: presenterId === currentUserId ? (screenStreamRef.current || localStreamRef.current || new MediaStream()) : (streamsRef.current.get(presenterId) || new MediaStream()),
               ownerName: participants.find(p => Number(p.id) === presenterId)?.name || 'Presenter',
-              isSelf: presenterId === (currentUser?.id||0),
+              isSelf: presenterId === currentUserId,
               onStop: () => setIsScreenSharing(false),
             } : null}
           />
@@ -557,8 +681,8 @@ const Meeting = () => {
             isScreenSharing={isScreenSharing}
             showChat={showChat}
             showParticipants={showParticipants}
-            onToggleCamera={() => { const next = !isCameraOn; setIsCameraOn(next); wsRef.current?.send(JSON.stringify({ type: next ? 'camera-on' : 'camera-off', data: {} })); }}
-            onToggleMic={() => { const next = !isMicOn; setIsMicOn(next); wsRef.current?.send(JSON.stringify({ type: next ? 'unmute' : 'mute', data: {} })); }}
+            onToggleCamera={handleToggleCamera}
+            onToggleMic={handleToggleMic}
             onToggleScreenShare={() => setIsScreenSharing(!isScreenSharing)}
             onToggleChat={() => setShowChat(!showChat)}
             onToggleParticipants={() => setShowParticipants(!showParticipants)}
@@ -592,7 +716,7 @@ const Meeting = () => {
                 End for me
               </Button>
               <Button variant="destructive" onClick={handleEndForEveryone} disabled={endingMeeting}>
-                {endingMeeting ? "Ending…" : "End for everyone"}
+                {endingMeeting ? "Ending..." : "End for everyone"}
               </Button>
             </div>
           </div>
@@ -603,3 +727,6 @@ const Meeting = () => {
 };
 
 export default Meeting;
+
+
+

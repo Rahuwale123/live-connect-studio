@@ -41,7 +41,7 @@ const ChatPanel = ({ onClose, messages, onSend }: ChatPanelProps) => {
             <div key={msg.id} className={`flex flex-col ${msg.isSelf ? "items-end" : "items-start"}`}>
               <div className={`max-w-[80%] ${msg.isSelf ? "order-1" : ""}`}>
                 <div className="text-xs text-muted-foreground mb-1">
-                  {msg.sender} • {msg.time}
+                  {msg.sender} - {msg.time}
                 </div>
                 <div
                   className={`rounded-2xl px-4 py-2 ${

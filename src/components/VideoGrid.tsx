@@ -7,6 +7,7 @@ export interface GridParticipant {
   isCameraOn?: boolean;
   stream?: MediaStream;
   isSelf?: boolean;
+  isHost?: boolean;
 }
 
 interface VideoGridProps {
