@@ -292,9 +292,14 @@ const Meeting = () => {
               });
               return arr;
             });
-            if (typeof msg.presenter_id === "number") {
-              presenterIdRef.current = msg.presenter_id;
-              setPresenterId(msg.presenter_id);
+            if (Object.prototype.hasOwnProperty.call(msg, "presenter_id")) {
+              if (typeof msg.presenter_id === "number") {
+                presenterIdRef.current = msg.presenter_id;
+                setPresenterId(msg.presenter_id);
+              } else {
+                presenterIdRef.current = null;
+                setPresenterId(null);
+              }
             }
             setTimeout(() => {
               const current = participantsRef.current;

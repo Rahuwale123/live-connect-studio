@@ -1,18 +1,5 @@
-const DEFAULT_BASE = "https://54.92.134.79.nip.io";
-
-const resolveBaseApi = () => {
-  const envBase = import.meta.env.VITE_API_BASE?.trim();
-  if (envBase) {
-    return envBase.replace(/\/$/, "");
-  }
-  if (typeof window !== "undefined" && window.location.origin) {
-    return window.location.origin.replace(/\/$/, "");
-  }
-  return DEFAULT_BASE;
-};
-
-export const BASE_API = resolveBaseApi();
-const WS_BASE = BASE_API.replace(/^http(s?)/, "ws$1");
+export const BASE_API = "http://54.172.182.54:8000";
+const BASE_ORIGIN = BASE_API.replace(/\/$/, "");
 
 export interface User { id: number; name: string; email: string; created_at: string; }
 export interface Participant { id: number; name: string; }
@@ -78,6 +65,18 @@ export async function getProfile() {
 }
 
 export function wsUrl(meeting_id: string): string {
-  const t = getToken();
-  return `${WS_BASE}/ws/meetings/${encodeURIComponent(meeting_id)}?token=${encodeURIComponent(t||'')}`;
+  const token = getToken() || "";
+  try {
+    const url = new URL(`/ws/meetings/${encodeURIComponent(meeting_id)}`, BASE_ORIGIN);
+    url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+    if (token) {
+      url.searchParams.set("token", token);
+    }
+    return url.toString();
+  } catch {
+    const sanitized = BASE_ORIGIN.replace(/^http(s?):\/\//, "");
+    const scheme = /^https?:\/\//.test(BASE_ORIGIN) && !/^https:\/\//.test(BASE_ORIGIN) ? "ws" : "wss";
+    const qs = token ? `?token=${encodeURIComponent(token)}` : "";
+    return `${scheme}://${sanitized.replace(/\/$/, "")}/ws/meetings/${encodeURIComponent(meeting_id)}${qs}`;
+  }
 }
