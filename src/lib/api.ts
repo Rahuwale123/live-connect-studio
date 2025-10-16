@@ -1,4 +1,4 @@
-export const BASE_API = "http://54.172.182.54:8000";
+export const BASE_API = "https://54-172-182-54.nip.io";
 const BASE_ORIGIN = BASE_API.replace(/\/$/, "");
 
 export interface User { id: number; name: string; email: string; created_at: string; }
@@ -75,7 +75,7 @@ export function wsUrl(meeting_id: string): string {
     return url.toString();
   } catch {
     const sanitized = BASE_ORIGIN.replace(/^http(s?):\/\//, "");
-    const scheme = /^https?:\/\//.test(BASE_ORIGIN) && !/^https:\/\//.test(BASE_ORIGIN) ? "ws" : "wss";
+    const scheme = BASE_ORIGIN.startsWith("https://") ? "wss" : "ws";
     const qs = token ? `?token=${encodeURIComponent(token)}` : "";
     return `${scheme}://${sanitized.replace(/\/$/, "")}/ws/meetings/${encodeURIComponent(meeting_id)}${qs}`;
   }
