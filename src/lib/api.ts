@@ -1,4 +1,4 @@
-export const BASE_API = "https://54-172-182-54.nip.io";
+export const BASE_API = "http://157.20.215.17:8000";
 const BASE_ORIGIN = BASE_API.replace(/\/$/, "");
 
 export interface User { id: number; name: string; email: string; created_at: string; }
