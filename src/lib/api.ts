@@ -1,4 +1,4 @@
-export const BASE_API = "https://meet.3-111-31-126.nip.io";
+export const BASE_API = "https://ai.3-111-31-126.nip.io";
 const BASE_ORIGIN = BASE_API.replace(/\/$/, "");
 
 export interface User { id: number; name: string; email: string; created_at: string; }
